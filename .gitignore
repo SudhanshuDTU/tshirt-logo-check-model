@@ -1,0 +1,8 @@
+venv311/
+venv/
+__pycache__/
+runs/
+dataset/
+*.cache
+yolov8n.pt
+retrain.py
