@@ -1,9 +1,10 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 from PIL import Image
 import io
-import os
+import gc
+import asyncio
 
 app = FastAPI()
 
@@ -16,35 +17,47 @@ app.add_middleware(
 
 model = YOLO("best.pt")
 
+# Limit concurrent inferences to prevent OOM under load
+_semaphore = asyncio.Semaphore(2)
+
+MAX_IMAGE_SIZE = (640, 640)
+MAX_FILE_BYTES = 10 * 1024 * 1024  # 10MB
+
+
 @app.get("/")
 def health():
     return {"status": "ok"}
 
+
 @app.post("/detect")
 async def detect(file: UploadFile = File(...)):
     image_bytes = await file.read()
-    image = Image.open(io.BytesIO(image_bytes))
 
-    results = model(image)
+    if len(image_bytes) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large. Max 10MB.")
 
-    detections = []
-    has_logo = False
+    async with _semaphore:
+        try:
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            image.thumbnail(MAX_IMAGE_SIZE, Image.LANCZOS)
 
-    for r in results:
-        for box in r.boxes:
-            cls = int(box.cls[0])
-            label = model.names[cls]
-            conf = float(box.conf[0])
+            results = model(image, verbose=False)
 
-            if label == "logo":
-                has_logo = True
+            detections = []
+            has_logo = False
 
-            detections.append({
-                "label": label,
-                "confidence": conf
-            })
+            for r in results:
+                for box in r.boxes:
+                    cls = int(box.cls[0])
+                    label = model.names[cls]
+                    conf = float(box.conf[0])
 
-    return {
-        "hasLogo": has_logo,
-        "detections": detections
-    }
+                    if label == "logo":
+                        has_logo = True
+
+                    detections.append({"label": label, "confidence": round(conf, 3)})
+        finally:
+            del image_bytes, image
+            gc.collect()
+
+    return {"hasLogo": has_logo, "detections": detections}
