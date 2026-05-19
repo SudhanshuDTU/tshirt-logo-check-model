@@ -38,7 +38,9 @@ async def detect(file: UploadFile = File(...)):
 
     async with _semaphore:
         try:
-            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            image = Image.open(io.BytesIO(image_bytes))
+            image.draft("RGB", MAX_IMAGE_SIZE)
+            image = image.convert("RGB")
             image.thumbnail(MAX_IMAGE_SIZE, Image.LANCZOS)
 
             results = model(image, verbose=False)
